@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation template for me.
+
+Parameters:
+  Owner:
+    Type: String
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.0.0.0/16"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "${Owner}-vpc"
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: "ap-northeast-1a"
+      CidrBlock: "10.0.0.0/24"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${Owner}-subnet-public-1a"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Owner}-igw"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${Owner}-rt"
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref Subnet
+
+  CreateRouteTable:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupName: !Sub "${Owner}-sg"
+      GroupDescription: !Sub "${Owner}-sg"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Owner}-sg"
+
+  # SecurityGroupIngress:
+  #   Type: AWS::EC2::SecurityGroupIngress
+  #   Properties:
+  #     GroupId: !Ref SecurityGroup
+  #     IpProtocol: tcp
+  #     FromPort: 80
+  #     ToPort: 80
+  #     CidrIp: "0.0.0.0/0"
+  #     Description: !Sub "${Owner}-ip"
+
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      CidrIp: "0.0.0.0/0"
+      Description: "zenkaihou"
+
+  IamRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${Owner}-ssm-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${Owner}-ssm-instance-profile"
+      Path: "/"
+      Roles:
+        - !Ref IamRole
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${Owner}-lt"
+      LaunchTemplateData:
+        ImageId: "ami-0ecb2a61303230c9d"
+        InstanceType: t2.micro
+        IamInstanceProfile:
+          Arn: !GetAtt InstanceProfile.Arn
+        BlockDeviceMappings:
+          - Ebs:
+              VolumeSize: 8
+              VolumeType: gp2
+              DeleteOnTermination: true
+            DeviceName: /dev/xvda
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            SubnetId: !Ref Subnet
+            Groups:
+              - !Ref SecurityGroup
+            AssociatePublicIpAddress: true
+            DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${Owner}-ec2"
+          - ResourceType: instance
+            Tags:
+              - Key: Owner
+                Value: !Ref Owner
+          - ResourceType: volume
+            Tags:
+              - Key: Name
+                Value: !Sub "${Owner}-ebs"
+          - ResourceType: volume
+            Tags:
+              - Key: Owner
+                Value: !Ref Owner
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            yum -y update
+
+  # Ec2Instance:
+  #   Type: AWS::EC2::Instance
+  #   Properties:
+  #     LaunchTemplate:
+  #       LaunchTemplateName: !Sub "${Owner}-lt"
+  #       Version: !GetAtt LaunchTemplate.LatestVersionNumber
+
+  # ElasticIP:
+  #   Type: AWS::EC2::EIP
+  #   Properties:
+  #     InstanceId: !Ref Ec2Instance
+  #     Tags:
+  #       - Key: Name
+  #         Value: !Sub "${Owner}-eip"
+
+  #    ____            __                     __
+  #   / __ \  __  __  / /_    ____   __  __  / /_   _____
+  #  / / / / / / / / / __/   / __ \ / / / / / __/  / ___/
+  # / /_/ / / /_/ / / /_    / /_/ // /_/ / / /_   (__  )
+  # \____/  \__,_/  \__/   / .___/ \__,_/  \__/  /____/
+  #                       /_/
+Outputs:
+  VpcId:
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcId"
+  VpcCidrBlockAssociations:
+    Value: !Select [0, !GetAtt Vpc.CidrBlockAssociations]
+    Export:
+      Name: !Sub "${AWS::StackName}-VpcCidrBlockAssociations"
+  SubnetId:
+    Value: !Ref Subnet
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetId"
+  SecurityGroupId:
+    Value: !Ref SecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityGroupId"
+  IamRoleArn:
+    Value: !GetAtt IamRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-IamRoleArn"
+  LaunchTemplateId:
+    Value: !Ref LaunchTemplate
+    Export:
+      Name: !Sub "${AWS::StackName}-LaunchTemplateId"
+  # Ec2InstanceId:
+  #   Value: !Ref Ec2
+  #   Export:
+  #     Name: !Sub "${AWS::StackName}-Ec2InstanceId"
+  # Comming Soon...
+  # AutoScalingGroupName:
+  #   Value: !Ref AutoScalingGroup
+  #   Export:
+  #     Name: !Sub "${AWS::StackName}-AutoScalingGroupName"
